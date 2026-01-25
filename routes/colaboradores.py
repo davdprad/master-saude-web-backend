@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 from typing import List, Optional
 import os
 
-from services.database import get_all_employees, get_employee_exams, get_exam_file_path, get_full_employee_list
+from services.database import get_all_employees, get_employee_exams, get_exam_file_path
 from schemas.employee import EmployeeList, EmployeeExam
 
 router = APIRouter()
@@ -13,17 +13,18 @@ def get_colaboradores_dados(
     page: int = 1, 
     limit: int = 10, 
     nome: Optional[str] = None, 
+    empresa: Optional[str] = None,
     cpf: Optional[str] = None,
     status: Optional[int] = None
 ):
     skip = (page - 1) * limit
-    employees, total = get_all_employees(skip=skip, limit=limit, nome=nome, cpf=cpf, status=status)
-    return {"employees": employees, "total": total}
-
-@router.get("/masteruser-colaboradores-todos", response_model=EmployeeList)
-def get_colaboradores_todos():
-    employees = get_full_employee_list()
-    return {"employees": employees, "total": len(employees)}
+    employees, counters = get_all_employees(skip=skip, limit=limit, nome=nome, empresa=empresa, cpf=cpf, status=status)
+    return {
+        "employees": employees, 
+        "total": counters['total'],
+        "total_ativos": counters['total_ativos'],
+        "total_inativos": counters['total_inativos']
+    }
 
 @router.get("/funcionario/{nid_funcionario}/exames", response_model=List[EmployeeExam])
 def get_funcionario_exames(nid_funcionario: int):
