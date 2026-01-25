@@ -8,6 +8,6 @@ router = APIRouter()
 async def get_employees(nid_empresa: int):
     try:
         employees = get_employees_by_company(nid_empresa)
-        return {"employees": employees}
+        return {"employees": employees, "total": len(employees)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

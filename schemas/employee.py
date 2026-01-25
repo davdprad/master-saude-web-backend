@@ -7,6 +7,15 @@ class Employee(BaseModel):
     DesCPF: str
     DesSetor: str
     DesFuncao: str
+    NidEmpresa: int
+    FlgAtivo: int
+    status: str
 
 class EmployeeList(BaseModel):
     employees: List[Employee]
+    total: int
+
+class EmployeeExam(BaseModel):
+    NidAnexo: int
+    NomExame: str
+    DesAnexo: str
