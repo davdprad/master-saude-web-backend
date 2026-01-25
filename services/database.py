@@ -1,4 +1,4 @@
-import mariadb
+import mysql.connector
 import pandas as pd
 from dotenv import load_dotenv
 import os
@@ -11,10 +11,10 @@ def get_db_connection():
     user = os.getenv('DB_USER')
     password = os.getenv('DB_PASSWORD')
     database = os.getenv('DB_DATABASE')
-    port = int(os.getenv('DB_PORT'))
+    port = os.getenv('DB_PORT')
 
     try:
-        connection = mariadb.connect(
+        connection = mysql.connector.connect(
             host=host,
             user=user,
             password=password,
@@ -22,101 +22,160 @@ def get_db_connection():
             port=port
         )
         return connection
-    except mariadb.Error as e:
+    except mysql.connector.Error as e:
         raise Exception(f"Database connection error: {e}")
 
 def get_employees_by_company(nid_empresa: int):
     connection = get_db_connection()
     try:
         query = """
-        SELECT f.NidFuncionario, f.NomFuncionario, f.DesCPF, s.DesSetor, fu.DesFuncao, fe.NidEmpresa, fe.FlgAtivo
+        SELECT
+            f.NidFuncionario,
+            f.NomFuncionario,
+            f.DesCPF,
+            s.DesSetor,
+            fu.DesFuncao,
+            fe.NidEmpresa,
+            eh.DesEmpresa,
+            fe.FlgAtivo
         FROM smt_master.tfuncionario f
-        INNER JOIN smt_master.tfuncionarioemp fe ON f.NidFuncionario = fe.NidFuncionario
-        LEFT JOIN smt_master.tsetor s ON fe.NidSetor = s.NidSetor
-        LEFT JOIN smt_master.tfuncao fu ON fe.NidFuncao = fu.NidFuncao
-        WHERE fe.NidEmpresa = %s AND fe.FlgAtivo = 1
+        INNER JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidFuncionario = f.NidFuncionario
+        INNER JOIN (
+            SELECT NidEmpresa, DesEmpresa
+            FROM smt_master.tempresahist
+            GROUP BY NidEmpresa, DesEmpresa
+        ) eh
+            ON eh.NidEmpresa = fe.NidEmpresa
+        LEFT JOIN smt_master.tsetor s
+            ON s.NidSetor = fe.NidSetor
+        LEFT JOIN smt_master.tfuncao fu
+            ON fu.NidFuncao = fe.NidFuncao
+        WHERE fe.NidEmpresa = %s
         """
         df = pd.read_sql_query(query, connection, params=[nid_empresa])
-        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 10 else 'Inativo')
+        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 1 else 'Inativo')
         return df.to_dict('records')
     finally:
         connection.close()
 
-def get_all_employees(skip: int = 0, limit: int = 10, nome: str = None, cpf: str = None, status: int = None):
+def get_all_employees(
+    skip: int = 0,
+    limit: int = 10,
+    nome: str = None,
+    empresa: str = None,
+    cpf: str = None,
+    status: int = None
+):
     connection = get_db_connection()
     try:
         cursor = connection.cursor()
-        
-        # Base da query (joins)
+
+        # Base da query (JOINs CORRETOS)
         base_query = """
         FROM smt_master.tfuncionario f
-        INNER JOIN smt_master.tfuncionarioemp fe ON f.NidFuncionario = fe.NidFuncionario
-        LEFT JOIN smt_master.tsetor s ON fe.NidSetor = s.NidSetor
-        LEFT JOIN smt_master.tfuncao fu ON fe.NidFuncao = fu.NidFuncao
+        INNER JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidFuncionario = f.NidFuncionario
+        INNER JOIN (
+            SELECT NidEmpresa, DesEmpresa
+            FROM smt_master.tempresahist
+            GROUP BY NidEmpresa, DesEmpresa
+        ) eh
+            ON eh.NidEmpresa = fe.NidEmpresa
+        LEFT JOIN smt_master.tsetor s
+            ON s.NidSetor = fe.NidSetor
+        LEFT JOIN smt_master.tfuncao fu
+            ON fu.NidFuncao = fe.NidFuncao
         """
-        
-        # Construção dinâmica dos filtros
+
+        # Filtros dinâmicos
         where_clauses = []
         params = []
-        
+
         if nome:
             where_clauses.append("f.NomFuncionario LIKE %s")
             params.append(f"%{nome}%")
-        
+
+        if empresa:
+            where_clauses.append("eh.DesEmpresa LIKE %s")
+            params.append(f"%{empresa}%")
+
         if cpf:
             where_clauses.append("f.DesCPF LIKE %s")
             params.append(f"%{cpf}%")
-            
+
         if status is not None:
             where_clauses.append("fe.FlgAtivo = %s")
             params.append(status)
-            
+
         where_str = ""
         if where_clauses:
             where_str = "WHERE " + " AND ".join(where_clauses)
 
-        # 1. Query para contar o total (aplicando os mesmos filtros)
-        count_query = f"SELECT COUNT(*) {base_query} {where_str}"
+        # 🔹 COUNT correto (sem multiplicação)
+        count_query = f"""
+        SELECT COUNT(DISTINCT f.NidFuncionario)
+        {base_query}
+        {where_str}
+        """
         cursor.execute(count_query, tuple(params))
         total_count = cursor.fetchone()[0]
 
-        # 2. Query para buscar os dados paginados
+        # 🔹 Contagem de colaboradores ativos
+        count_ativos_query = f"""
+        SELECT COUNT(DISTINCT f.NidFuncionario)
+        {base_query}
+        {where_str}
+        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 1
+        """
+        cursor.execute(count_ativos_query, tuple(params))
+        total_ativos = cursor.fetchone()[0]
+
+        # 🔹 Contagem de colaboradores inativos
+        count_inativos_query = f"""
+        SELECT COUNT(DISTINCT f.NidFuncionario)
+        {base_query}
+        {where_str}
+        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 0
+        """
+        cursor.execute(count_inativos_query, tuple(params))
+        total_inativos = cursor.fetchone()[0]
+
+        # 🔹 Dados paginados
         data_query = f"""
-        SELECT f.NidFuncionario, f.NomFuncionario, f.DesCPF, s.DesSetor, fu.DesFuncao, fe.NidEmpresa, fe.FlgAtivo
+        SELECT
+            f.NidFuncionario,
+            f.NomFuncionario,
+            f.DesCPF,
+            s.DesSetor,
+            fu.DesFuncao,
+            fe.NidEmpresa,
+            eh.DesEmpresa,
+            fe.FlgAtivo
         {base_query}
         {where_str}
         LIMIT %s OFFSET %s
         """
-        # Adiciona limit e skip aos parâmetros para a query de dados
+
         data_params = params + [limit, skip]
-        
         df = pd.read_sql_query(data_query, connection, params=data_params)
-        
+
+        # Normalizações
         df['FlgAtivo'] = df['FlgAtivo'].fillna(0).astype(int)
         df['NidEmpresa'] = df['NidEmpresa'].fillna(0).astype(int)
-        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 10 else 'Inativo')
-        return df.to_dict('records'), total_count
+        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 1 else 'Inativo')
+
+        # Retornar dados com contadores
+        return df.to_dict('records'), {
+            'total': total_count,
+            'total_ativos': total_ativos,
+            'total_inativos': total_inativos
+        }
+
     finally:
         connection.close()
 
-def get_full_employee_list():
-    connection = get_db_connection()
-    try:
-        query = """
-        SELECT f.NidFuncionario, f.NomFuncionario, f.DesCPF, s.DesSetor, fu.DesFuncao, fe.NidEmpresa, fe.FlgAtivo
-        FROM smt_master.tfuncionario f
-        INNER JOIN smt_master.tfuncionarioemp fe ON f.NidFuncionario = fe.NidFuncionario
-        LEFT JOIN smt_master.tsetor s ON fe.NidSetor = s.NidSetor
-        LEFT JOIN smt_master.tfuncao fu ON fe.NidFuncao = fu.NidFuncao
-        """
-        df = pd.read_sql_query(query, connection)
-        
-        df['FlgAtivo'] = df['FlgAtivo'].fillna(0).astype(int)
-        df['NidEmpresa'] = df['NidEmpresa'].fillna(0).astype(int)
-        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 10 else 'Inativo')
-        return df.to_dict('records')
-    finally:
-        connection.close()
+
 
 def get_employee_exams(nid_funcionario: int):
     connection = get_db_connection()
@@ -124,9 +183,12 @@ def get_employee_exams(nid_funcionario: int):
         query = """
         SELECT efa.NidAnexo, efa.DesAnexo
         FROM smt_master.tfuncionario f
-        INNER JOIN smt_master.taso a ON f.NidFuncionario = a.NidFuncionario
-        INNER JOIN smt_master.tasoexame ae ON a.NidAso = ae.NidAso
-        INNER JOIN smt_master.texamefuncanexo efa ON ae.NidProcedimentoFunc = efa.NidProcedimentoFunc
+        INNER JOIN smt_master.taso a
+            ON a.NidFuncionario = f.NidFuncionario
+        INNER JOIN smt_master.tasoexame ae
+            ON ae.NidAso = a.NidAso
+        INNER JOIN smt_master.texamefuncanexo efa
+            ON efa.NidProcedimentoFunc = ae.NidProcedimentoFunc
         WHERE f.NidFuncionario = %s
         """
         df = pd.read_sql_query(query, connection, params=[nid_funcionario])
