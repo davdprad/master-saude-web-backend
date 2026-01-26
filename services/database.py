@@ -86,6 +86,15 @@ def get_all_employees(
             ON s.NidSetor = fe.NidSetor
         LEFT JOIN smt_master.tfuncao fu
             ON fu.NidFuncao = fe.NidFuncao
+        LEFT JOIN (
+            SELECT 
+                a1.NidFuncionario,
+                a1.NidEmpresa,
+                MIN(a1.DatASO) as DatASO
+            FROM smt_master.taso a1
+            WHERE a1.TipASO IN (1, 2)
+            GROUP BY a1.NidFuncionario, a1.NidEmpresa
+        ) a ON a.NidFuncionario = f.NidFuncionario AND a.NidEmpresa = fe.NidEmpresa
         """
 
         # Filtros dinâmicos
@@ -151,7 +160,8 @@ def get_all_employees(
             fu.DesFuncao,
             fe.NidEmpresa,
             eh.DesEmpresa,
-            fe.FlgAtivo
+            fe.FlgAtivo,
+            DATE_FORMAT(a.DatASO, '%d/%m/%Y') as DatASO
         {base_query}
         {where_str}
         LIMIT %s OFFSET %s

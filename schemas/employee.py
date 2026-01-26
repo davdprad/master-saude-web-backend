@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class Employee(BaseModel):
     NidFuncionario: int
@@ -11,6 +11,7 @@ class Employee(BaseModel):
     NidEmpresa: int
     FlgAtivo: int
     status: str
+    DatASO: Optional[str] = None
 
 class EmployeeList(BaseModel):
     employees: List[Employee]
