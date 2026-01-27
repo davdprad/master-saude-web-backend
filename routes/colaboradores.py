@@ -3,7 +3,7 @@ from fastapi.responses import FileResponse
 from typing import List, Optional
 import os
 
-from services.database import get_all_employees, get_employee_exams, get_exam_file_path
+from services.database import get_all_employees, get_employee_exams, get_exam_file_path, get_companies_with_employee_count
 from schemas.employee import EmployeeList, EmployeeExam
 
 router = APIRouter()
@@ -45,3 +45,17 @@ def download_exame(nid_anexo: int):
         raise HTTPException(status_code=404, detail="Arquivo de exame não encontrado.")
     
     return FileResponse(file_path)
+
+@router.get("/empresas")
+def get_empresas_dados(
+    page: int = 1, 
+    limit: int = 10, 
+    empresa: Optional[str] = None,
+    status: Optional[int] = None
+):
+    skip = (page - 1) * limit
+    companies, counters = get_companies_with_employee_count(skip=skip, limit=limit, empresa=empresa, status=status)
+    return {
+        "companies": companies, 
+        "total": counters['total']
+    }

@@ -230,3 +230,228 @@ def get_exam_file_path(nid_anexo: int):
         return None
     finally:
         connection.close()
+
+
+def get_companies_with_employee_count(
+    skip: int = 0,
+    limit: int = 10,
+    empresa: str = None,
+    status: int = None
+):
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        # Base query to get companies and count active employees
+        base_query = """
+        SELECT 
+            eh.NidEmpresa,
+            eh.DesEmpresa,
+            eh.GraRisco,
+            eh.NidCNAE1,
+            eh.FlgSituacao,
+            eh.DesEMail,
+            eh.DesTelefone1,
+            eh.DesTelefone2,
+            COUNT(DISTINCT fe.NidFuncionario) as total_funcionarios
+        FROM smt_master.tempresahist eh
+        LEFT JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidEmpresa = eh.NidEmpresa
+            AND fe.FlgAtivo = 1
+        """
+
+        # Filters
+        where_clauses = []
+        params = []
+
+        if empresa:
+            where_clauses.append("eh.DesEmpresa LIKE %s")
+            params.append(f"%{empresa}%")
+
+        if status is not None:
+            where_clauses.append("eh.FlgSituacao = %s")
+            params.append(status)
+
+        where_str = ""
+        if where_clauses:
+            where_str = "WHERE " + " AND ".join(where_clauses)
+
+        # Group by to aggregate employee counts
+        group_by = """
+        GROUP BY eh.NidEmpresa, eh.DesEmpresa, eh.GraRisco, 
+                 eh.NidCNAE1, eh.FlgSituacao, eh.DesEMail, eh.DesTelefone1, eh.DesTelefone2
+        """
+
+        # Order by company name
+        order_by = "ORDER BY eh.DesEmpresa"
+
+        # 1. Count Total Companies
+        count_query = f"""
+        SELECT COUNT(*) FROM (
+            {base_query} {where_str} {group_by}
+        ) as subquery
+        """
+        cursor.execute(count_query, tuple(params))
+        total = cursor.fetchone()[0]
+
+        # 2. Get Paginated Companies
+        data_query = f"""
+        {base_query} {where_str} {group_by} {order_by} LIMIT %s OFFSET %s
+        """
+        data_params = params + [limit, skip]
+        df = pd.read_sql_query(data_query, connection, params=data_params)
+
+        # Convert to list of dicts
+        companies = []
+        for _, row in df.iterrows():
+            companies.append({
+                "NidEmpresa": int(row["NidEmpresa"]),
+                "DesEmpresa": row["DesEmpresa"],
+                "GraRisco": int(row["GraRisco"]) if pd.notna(row["GraRisco"]) else None,
+                "NidCNAE1": int(row["NidCNAE1"]) if pd.notna(row["NidCNAE1"]) else None,
+                "FlgSituacao": int(row["FlgSituacao"]) if pd.notna(row["FlgSituacao"]) else None,
+                "DesEMail": row["DesEMail"],
+                "DesTelefone1": row["DesTelefone1"],
+                "DesTelefone2": row["DesTelefone2"],
+                "total_funcionarios": int(row["total_funcionarios"]) if pd.notna(row["total_funcionarios"]) else 0
+            })
+
+        return companies, {"total": total}
+
+    finally:
+        connection.close()
+
+def get_all_employee_exams_grouped(
+    skip: int = 0,
+    limit: int = 10,
+    nid_empresa: int = None,
+    nome: str = None,
+    empresa: str = None,
+    cpf: str = None,
+    status: int = None
+):
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        base_joins = """
+        FROM smt_master.tfuncionario f
+        INNER JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidFuncionario = f.NidFuncionario
+        INNER JOIN (
+            SELECT NidEmpresa, DesEmpresa
+            FROM smt_master.tempresahist
+            GROUP BY NidEmpresa, DesEmpresa
+        ) eh
+            ON eh.NidEmpresa = fe.NidEmpresa
+        INNER JOIN smt_master.taso a
+            ON a.NidFuncionario = f.NidFuncionario
+            AND a.NidEmpresa = fe.NidEmpresa
+        INNER JOIN smt_master.tasoexame ae
+            ON ae.NidAso = a.NidAso
+        INNER JOIN smt_master.texamefuncanexo efa
+            ON efa.NidProcedimentoFunc = ae.NidProcedimentoFunc
+        """
+
+        where_clauses = []
+        params = []
+
+        if nid_empresa:
+            where_clauses.append("fe.NidEmpresa = %s")
+            params.append(nid_empresa)
+
+        if nome:
+            where_clauses.append("f.NomFuncionario LIKE %s")
+            params.append(f"%{nome}%")
+
+        if empresa:
+            where_clauses.append("eh.DesEmpresa LIKE %s")
+            params.append(f"%{empresa}%")
+
+        if cpf:
+            where_clauses.append("f.DesCPF LIKE %s")
+            params.append(f"%{cpf}%")
+
+        if status is not None:
+            where_clauses.append("fe.FlgAtivo = %s")
+            params.append(status)
+
+        where_str = ""
+        if where_clauses:
+            where_str = "WHERE " + " AND ".join(where_clauses)
+
+        # 1. Count Total Distinct Employees
+        count_query = f"SELECT COUNT(DISTINCT f.NidFuncionario) {base_joins} {where_str}"
+        cursor.execute(count_query, tuple(params))
+        total = cursor.fetchone()[0]
+
+        # 2. Get Page IDs
+        ids_query = f"""
+        SELECT DISTINCT f.NidFuncionario 
+        {base_joins} 
+        {where_str} 
+        ORDER BY f.NidFuncionario 
+        LIMIT %s OFFSET %s
+        """
+        cursor.execute(ids_query, tuple(params + [limit, skip]))
+        rows = cursor.fetchall()
+        page_ids = [row[0] for row in rows]
+
+        if not page_ids:
+            return [], {"total": total}
+
+        # 3. Fetch Data for Page IDs
+        placeholders = ','.join(['%s'] * len(page_ids))
+        
+        data_query = f"""
+        SELECT
+            f.NidFuncionario,
+            f.NomFuncionario,
+            f.DesCPF,
+            fe.NidEmpresa,
+            eh.DesEmpresa,
+            efa.NidAnexo,
+            efa.DesAnexo,
+            DATE_FORMAT(a.DatASO, '%d/%m/%Y') AS DatASO,
+            DATE_FORMAT(a.DatValidade, '%d/%m/%Y') AS DatValidade
+        {base_joins}
+        WHERE f.NidFuncionario IN ({placeholders})
+        """
+
+        data_params = list(page_ids)
+        if nid_empresa:
+            data_query += " AND fe.NidEmpresa = %s"
+            data_params.append(nid_empresa)
+
+        data_query += " ORDER BY f.NidFuncionario, a.DatASO DESC"
+
+        df = pd.read_sql_query(data_query, connection, params=data_params)
+
+        employees = {}
+
+        for _, row in df.iterrows():
+            nid_func = int(row["NidFuncionario"])
+
+            if nid_func not in employees:
+                employees[nid_func] = {
+                    "NidFuncionario": nid_func,
+                    "NomFuncionario": row["NomFuncionario"],
+                    "DesCPF": row["DesCPF"],
+                    "NidEmpresa": int(row["NidEmpresa"]),
+                    "DesEmpresa": row["DesEmpresa"],
+                    "exames": []
+                }
+
+            employees[nid_func]["exames"].append({
+                "NidAnexo": int(row["NidAnexo"]),
+                "NomExame": row["DesAnexo"].split("-")[0].strip()
+                    if row["DesAnexo"] else None,
+                "DesAnexo": row["DesAnexo"],
+                "DatASO": row["DatASO"],
+                "DatValidade": row["DatValidade"]
+            })
+
+        return list(employees.values()), {"total": total}
+
+    finally:
+        connection.close()
