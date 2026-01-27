@@ -20,6 +20,16 @@ class EmployeeList(BaseModel):
     total_inativos: int
 
 class EmployeeExam(BaseModel):
-    NidAnexo: int
-    NomExame: str
-    DesAnexo: str
+    NidAnexo: Optional[int] = None
+    NomExame: Optional[str] = None
+    DesAnexo: Optional[str] = None
+    DatASO: Optional[str] = None
+    DatValidade: Optional[str] = None
+
+class EmployeeExamGrouped(BaseModel):
+    NidFuncionario: int
+    NomFuncionario: str
+    DesCPF: str
+    NidEmpresa: int
+    DesEmpresa: str
+    exames: List[EmployeeExam]
