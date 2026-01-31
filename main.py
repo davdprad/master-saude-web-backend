@@ -7,9 +7,12 @@ app = FastAPI(title="Empresa API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://192.168.15.6:3000",
+    ],
     allow_credentials=True,
-    allow_methods=["GET", "OPTIONS"],  # Adiciona OPTIONS
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
