@@ -1,6 +1,8 @@
 import mysql.connector
 import pandas as pd
 from dotenv import load_dotenv
+from typing import Optional, Dict, Any
+from datetime import datetime
 import os
 
 load_dotenv()
@@ -24,6 +26,8 @@ def get_db_connection():
         return connection
     except mysql.connector.Error as e:
         raise Exception(f"Database connection error: {e}")
+
+# =============== CONSULTA DOS DADOS PRINCIPAIS ===============
 
 def get_employees_by_company(nid_empresa: int):
     connection = get_db_connection()
@@ -181,11 +185,8 @@ def get_all_employees(
             'total_ativos': total_ativos,
             'total_inativos': total_inativos
         }
-
     finally:
         connection.close()
-
-
 
 def get_employee_exams(nid_funcionario: int):
     connection = get_db_connection()
@@ -230,7 +231,6 @@ def get_exam_file_path(nid_anexo: int):
         return None
     finally:
         connection.close()
-
 
 def get_companies_with_employee_count(
     skip: int = 0,
@@ -317,7 +317,6 @@ def get_companies_with_employee_count(
             })
 
         return companies, {"total": total}
-
     finally:
         connection.close()
 
@@ -452,6 +451,316 @@ def get_all_employee_exams_grouped(
             })
 
         return list(employees.values()), {"total": total}
+    finally:
+        connection.close()
 
+# ================= VALIDAÇÃO DE LOGIN ==================
+
+def get_master_login_by_login(login: str) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT
+                NidLogin AS id,
+                DesLogin AS login,
+                DesSenhaHash AS senha_hash,
+                DesRole AS role
+            FROM smt_master.tauthsitemaster
+            WHERE DesLogin = %s
+              AND DesRole = 'master'
+            LIMIT 1
+        """
+        cursor.execute(query, (login,))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+def get_company_login_by_login(login: str) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT
+                NidLogin AS id,
+                DesLogin AS login,
+                DesSenhaHash AS senha_hash,
+                DesRole AS role,
+                NidEmpresa AS company_id
+            FROM smt_master.tauthsitemaster
+            WHERE DesLogin = %s
+              AND DesRole = 'convenio'
+            LIMIT 1
+        """
+        cursor.execute(query, (login,))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+def get_employee_login_by_login(login: str) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT
+                NidLogin AS id,
+                DesLogin AS login,
+                DesSenhaHash AS senha_hash,
+                DesRole AS role,
+                NidFuncionario AS employee_id,
+                NidEmpresa AS company_id
+            FROM smt_master.tauthsitemaster
+            WHERE DesLogin = %s
+              AND DesRole = 'cliente'
+            LIMIT 1
+        """
+        cursor.execute(query, (login,))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+def get_auth_by_id(nid_auth: int) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT
+                NidLogin AS id,
+                DesLogin AS login,
+                DesRole AS role,
+                NidEmpresa AS company_id,
+                NidFuncionario AS employee_id
+            FROM smt_master.tauthsitemaster
+            WHERE NidLogin = %s
+            LIMIT 1
+        """
+        cursor.execute(query, (nid_auth,))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+def get_refresh_token_by_id(refresh_token_id: int) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT NidRefreshToken as id, NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked
+            FROM smt_master.tauthsitemasterrefreshtoken
+            WHERE NidRefreshToken = %s
+            LIMIT 1
+        """
+        cursor.execute(query, (refresh_token_id,))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+# =============== CADASTRO DE NOVOS LOGINS ===============
+
+def login_exists_anywhere(login: str) -> bool:
+    """
+    Como agora é tabela única, basta checar nela.
+    Se você quiser permitir o MESMO login em roles diferentes, troque por:
+    WHERE DesLogin=%s AND DesRole=%s
+    """
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        query = "SELECT 1 FROM smt_master.tauthsitemaster WHERE DesLogin = %s LIMIT 1"
+        cursor.execute(query, (login,))
+        return cursor.fetchone() is not None
+    finally:
+        connection.close()
+
+def create_master_login(login: str, senha_hash: str) -> int:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        if login_exists_anywhere(login):
+            raise ValueError("Login já está em uso")
+
+        query = """
+            INSERT INTO smt_master.tauthsitemaster
+                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario)
+            VALUES
+                (%s, %s, 'master', NULL, NULL)
+        """
+        cursor.execute(query, (login, senha_hash))
+        connection.commit()
+        return cursor.lastrowid
+
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def create_company_login(login: str, senha_hash: str, nid_empresa: int) -> int:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        if login_exists_anywhere(login):
+            raise ValueError("Login já está em uso")
+
+        # valida empresa existe
+        check_empresa = """
+            SELECT 1
+            FROM smt_master.tempresahist
+            WHERE NidEmpresa = %s
+            LIMIT 1
+        """
+        cursor.execute(check_empresa, (nid_empresa,))
+        if not cursor.fetchone():
+            raise ValueError("Empresa não encontrada")
+
+        query = """
+            INSERT INTO smt_master.tauthsitemaster
+                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario)
+            VALUES
+                (%s, %s, 'convenio', %s, NULL)
+        """
+        cursor.execute(query, (login, senha_hash, nid_empresa))
+        connection.commit()
+        return cursor.lastrowid
+
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def create_employee_login(
+    login: str,
+    senha_hash: str,
+    nid_funcionario: int,
+    nid_empresa: int
+) -> int:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        if login_exists_anywhere(login):
+            raise ValueError("Login já está em uso")
+
+        # valida funcionário existe
+        check_func = """
+            SELECT 1
+            FROM smt_master.tfuncionario
+            WHERE NidFuncionario = %s
+            LIMIT 1
+        """
+        cursor.execute(check_func, (nid_funcionario,))
+        if not cursor.fetchone():
+            raise ValueError("Funcionário não encontrado")
+
+        # valida vínculo funcionário x empresa
+        check_vinculo = """
+            SELECT 1
+            FROM smt_master.tfuncionarioemp
+            WHERE NidFuncionario = %s AND NidEmpresa = %s
+            LIMIT 1
+        """
+        cursor.execute(check_vinculo, (nid_funcionario, nid_empresa))
+        if not cursor.fetchone():
+            raise ValueError("Funcionário não vinculado à empresa informada")
+
+        query = """
+            INSERT INTO smt_master.tauthsitemaster
+                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario)
+            VALUES
+                (%s, %s, 'cliente', %s, %s)
+        """
+        cursor.execute(query, (login, senha_hash, nid_empresa, nid_funcionario))
+        connection.commit()
+        return cursor.lastrowid
+
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+# =============== REFRESH TOKENS ===============
+
+def insert_refresh_token(
+    nid_auth: int,
+    refresh_token_hash: str,
+    expires_at: datetime,
+) -> int:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        query = """
+            INSERT INTO smt_master.tauthsitemasterrefreshtoken
+                (NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked)
+            VALUES
+                (%s, %s, %s, 0)
+        """
+        cursor.execute(query, (nid_auth, refresh_token_hash, expires_at))
+        connection.commit()
+        return cursor.lastrowid
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def get_active_refresh_tokens_by_user(nid_auth: int) -> list[Dict[str, Any]]:
+    """
+    Busca refresh tokens não revogados e não expirados do usuário.
+    (Vamos verificar o hash em Python, porque hash Argon2 não é comparável via SQL)
+    """
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT NidRefreshToken, RefreshTokenHash, DatExpiresAt, FlgRevoked
+            FROM smt_master.tauthsitemasterrefreshtoken
+            WHERE NidLogin = %s
+              AND FlgRevoked = 0
+              AND DatExpiresAt > NOW()
+            ORDER BY NidRefreshToken DESC
+            LIMIT 20
+        """
+        cursor.execute(query, (nid_auth,))
+        return cursor.fetchall() or []
+    finally:
+        connection.close()
+
+def revoke_refresh_token(refresh_token_id: int) -> None:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        query = """
+            UPDATE smt_master.tauthsitemasterrefreshtoken
+            SET FlgRevoked = 1,
+                DatRevokedAt = NOW()
+            WHERE NidRefreshToken = %s
+        """
+        cursor.execute(query, (refresh_token_id,))
+        connection.commit()
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def revoke_all_refresh_tokens_for_user(nid_auth: int) -> None:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        query = """
+            UPDATE smt_master.tauthsitemasterrefreshtoken
+            SET FlgRevoked = 1,
+                DatRevokedAt = NOW()
+            WHERE NidLogin = %s
+              AND FlgRevoked = 0
+        """
+        cursor.execute(query, (nid_auth,))
+        connection.commit()
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
     finally:
         connection.close()
