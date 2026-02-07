@@ -57,9 +57,25 @@ def get_employees_by_company(nid_empresa: int):
             ON fu.NidFuncao = fe.NidFuncao
         WHERE fe.NidEmpresa = %s
         """
+
         df = pd.read_sql_query(query, connection, params=[nid_empresa])
-        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 1 else 'Inativo')
-        return df.to_dict('records')
+
+        # Normaliza FlgAtivo (NULL -> 0) e cria status
+        df["FlgAtivo"] = df["FlgAtivo"].fillna(0).astype(int)
+        df["status"] = df["FlgAtivo"].apply(lambda x: "Ativo" if x == 1 else "Inativo")
+
+        # Totais
+        total = int(len(df))
+        total_ativos = int((df["FlgAtivo"] == 1).sum())
+        total_inativos = int((df["FlgAtivo"] == 0).sum())
+
+        employees = df.to_dict("records")
+
+        return employees, {
+            'total': total,
+            'total_ativos': total_ativos,
+            'total_inativos': total_inativos
+        }
     finally:
         connection.close()
 
@@ -67,7 +83,9 @@ def get_all_employees(
     skip: int = 0,
     limit: int = 10,
     nome: str = None,
-    empresa: str = None,
+    nidFuncionario: Optional[int] = None,
+    empresa: Optional[str] = None,
+    nidEmpresa: Optional[int] = None,
     cpf: str = None,
     status: int = None
 ):
@@ -109,9 +127,17 @@ def get_all_employees(
             where_clauses.append("f.NomFuncionario LIKE %s")
             params.append(f"%{nome}%")
 
+        if nidFuncionario:
+            where_clauses.append("f.NidFuncionario LIKE %s")
+            params.append(f"{nidFuncionario}")
+
         if empresa:
             where_clauses.append("eh.DesEmpresa LIKE %s")
             params.append(f"%{empresa}%")
+
+        if nidEmpresa:
+            where_clauses.append("fe.NidEmpresa LIKE %s")
+            params.append(f"{nidEmpresa}")
 
         if cpf:
             where_clauses.append("f.DesCPF LIKE %s")
@@ -127,29 +153,29 @@ def get_all_employees(
 
         # 🔹 COUNT correto (sem multiplicação)
         count_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
         """
         cursor.execute(count_query, tuple(params))
         total_count = cursor.fetchone()[0]
 
         # 🔹 Contagem de colaboradores ativos
         count_ativos_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
-        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 1
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
+            {"AND" if where_str else "WHERE"} fe.FlgAtivo = 1
         """
         cursor.execute(count_ativos_query, tuple(params))
         total_ativos = cursor.fetchone()[0]
 
         # 🔹 Contagem de colaboradores inativos
         count_inativos_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
-        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 0
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
+            {"AND" if where_str else "WHERE"} fe.FlgAtivo = 0
         """
         cursor.execute(count_inativos_query, tuple(params))
         total_inativos = cursor.fetchone()[0]
