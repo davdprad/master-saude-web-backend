@@ -1,14 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional
-<<<<<<< HEAD
-from services.database import get_employees_by_company, get_all_employee_exams_grouped
-from schemas.employee import EmployeeList, EmployeeExamGrouped
-=======
 from services.database import get_employees_by_company, get_all_employee_exams_grouped, get_all_employees, get_employee_exams, get_exam_file_path, get_companies_with_employee_count
 from schemas.employee import EmployeeList, EmployeeExamGrouped, EmployeeExam
 from fastapi.responses import FileResponse
 import os
->>>>>>> feat-jwt
 
 router = APIRouter()
 
@@ -44,8 +39,6 @@ async def get_employees_exams_grouped(
         return employees
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-<<<<<<< HEAD
-=======
 
 @router.get("/masteruser-colaboradores-dados", response_model=EmployeeList)
 def get_colaboradores_dados(
@@ -98,4 +91,3 @@ def get_empresas_dados(
         "companies": companies, 
         "total": counters['total']
     }
->>>>>>> feat-jwt

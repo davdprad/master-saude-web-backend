@@ -2,6 +2,7 @@ import mysql.connector
 import pandas as pd
 from dotenv import load_dotenv
 from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime
 import os
 
@@ -762,5 +763,124 @@ def revoke_all_refresh_tokens_for_user(nid_auth: int) -> None:
     except mysql.connector.Error:
         connection.rollback()
         raise
+    finally:
+        connection.close()
+
+# =============== GERENCIAMENTO DE FILA ===============
+
+def add_patient_to_queue(
+    nid_empresa: int,
+    nome_paciente: str,
+    tipo_fila: str,
+    cpf: Optional[str] = None,
+    rg: Optional[str] = None,
+    data_nascimento: Optional[str] = None,
+    prioridade: bool = False,
+    nid_funcionario: Optional[int] = None
+) -> int:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        
+        # 1. Calcular próximo número de senha para hoje e para essa empresa/tipo
+        query_senha = """
+            SELECT COALESCE(MAX(NumSenha), 0) + 1
+            FROM smt_master.tfila
+            WHERE NidEmpresa = %s 
+              AND DesTipoFila = %s
+              AND DATE(DatEntrada) = CURDATE()
+        """
+        cursor.execute(query_senha, (nid_empresa, tipo_fila))
+        proxima_senha = cursor.fetchone()[0]
+
+        # 2. Inserir na fila
+        query_insert = """
+            INSERT INTO smt_master.tfila
+            (NidEmpresa, NidFuncionario, NomPaciente, DesCPF, DesRG, DatNascimento, NumSenha, FlgPrioridade, DesTipoFila, DesStatus, DatEntrada)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'AGUARDANDO', NOW())
+        """
+        cursor.execute(query_insert, (
+            nid_empresa, 
+            nid_funcionario, 
+            nome_paciente, 
+            cpf,
+            rg,
+            data_nascimento,
+            proxima_senha, 
+            1 if prioridade else 0, 
+            tipo_fila
+        ))
+        connection.commit()
+        return cursor.lastrowid
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def get_next_patient(nid_empresa: int, tipo_fila: str) -> Optional[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        # Prioridade: Status AGUARDANDO -> FlgPrioridade (1 vem antes de 0) -> Quem chegou primeiro (DatEntrada)
+        query = """
+            SELECT * FROM smt_master.tfila
+            WHERE NidEmpresa = %s 
+              AND DesTipoFila = %s
+              AND DesStatus = 'AGUARDANDO'
+            ORDER BY FlgPrioridade DESC, DatEntrada ASC
+            LIMIT 1
+        """
+        cursor.execute(query, (nid_empresa, tipo_fila))
+        return cursor.fetchone()
+    finally:
+        connection.close()
+
+def update_queue_status(nid_fila: int, novo_status: str) -> None:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+        
+        # Define qual campo de data atualizar baseado no status
+        date_field = ""
+        if novo_status == 'CHAMADO':
+            date_field = ", DatChamada = NOW()"
+        elif novo_status == 'ATENDIDO':
+            date_field = ", DatFim = NOW()"
+        elif novo_status == 'EM_ATENDIMENTO':
+            date_field = ", DatInicioAtendimento = NOW()"
+            
+        query = f"""
+            UPDATE smt_master.tfila
+            SET DesStatus = %s {date_field}
+            WHERE NidFila = %s
+        """
+        cursor.execute(query, (novo_status, nid_fila))
+        connection.commit()
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+def get_queue_list(nid_empresa: int, tipo_fila: Optional[str] = None) -> List[Dict[str, Any]]:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+        query = """
+            SELECT * FROM smt_master.tfila
+            WHERE NidEmpresa = %s
+              AND DesStatus IN ('AGUARDANDO', 'CHAMADO', 'EM_ATENDIMENTO')
+        """
+        params = [nid_empresa]
+        
+        if tipo_fila:
+            query += " AND DesTipoFila = %s"
+            params.append(tipo_fila)
+            
+        query += " ORDER BY FlgPrioridade DESC, DatEntrada ASC"
+        
+        cursor.execute(query, tuple(params))
+        return cursor.fetchall()
     finally:
         connection.close()
