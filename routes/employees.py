@@ -77,7 +77,7 @@ def download_exame(nid_anexo: int):
     if not filename:
         raise HTTPException(status_code=404, detail="Registro do exame não encontrado.")
 
-    exams_folder = r"C:\Users\Rikellme\Desktop\master-saude-web-backend\exames"
+    exams_folder = r"C:\Users\David Prado\Downloads\Github\master-saude-web-backend\exames"
     file_path = os.path.join(exams_folder, os.path.basename(filename))
     
     if not os.path.exists(file_path):

@@ -3,7 +3,11 @@ import pandas as pd
 from dotenv import load_dotenv
 from typing import Optional, Dict, Any
 from datetime import datetime
+from utils.cnpj_formatter import format_cnpj_cei
 import os
+import re
+
+padrao_split = re.compile(r"\s*[_\-\u2013\u2014]\s*")
 
 load_dotenv()
 
@@ -233,8 +237,13 @@ def get_employee_exams(nid_funcionario: int):
         exams = []
         for _, row in df.iterrows():
             des_anexo = row['DesAnexo']
+
             # Extract name before the first hyphen, or use full name if no hyphen
-            nom_exame = des_anexo.split('-')[0].strip() if des_anexo and '-' in des_anexo else (des_anexo or "Exame")
+            nom_exame = (
+                re.sub(r'\s+', ' ', re.split(r"[-_—–]", des_anexo, maxsplit=1)[0]).strip()
+                if des_anexo 
+                else "Exame"
+            )
             
             exams.append({
                 "NidAnexo": row['NidAnexo'],
@@ -273,6 +282,7 @@ def get_companies_with_employee_count(
         SELECT 
             eh.NidEmpresa,
             eh.DesEmpresa,
+            eh.DesCNPJCEI,
             eh.GraRisco,
             eh.NidCNAE1,
             eh.FlgSituacao,
@@ -304,7 +314,7 @@ def get_companies_with_employee_count(
 
         # Group by to aggregate employee counts
         group_by = """
-        GROUP BY eh.NidEmpresa, eh.DesEmpresa, eh.GraRisco, 
+        GROUP BY eh.NidEmpresa, eh.DesEmpresa, eh.GraRisco, eh.DesCNPJCEI,
                  eh.NidCNAE1, eh.FlgSituacao, eh.DesEMail, eh.DesTelefone1, eh.DesTelefone2
         """
 
@@ -333,6 +343,7 @@ def get_companies_with_employee_count(
             companies.append({
                 "NidEmpresa": int(row["NidEmpresa"]),
                 "DesEmpresa": row["DesEmpresa"],
+                "DesCNPJCEI": format_cnpj_cei(row["DesCNPJCEI"]),
                 "GraRisco": int(row["GraRisco"]) if pd.notna(row["GraRisco"]) else None,
                 "NidCNAE1": int(row["NidCNAE1"]) if pd.notna(row["NidCNAE1"]) else None,
                 "FlgSituacao": int(row["FlgSituacao"]) if pd.notna(row["FlgSituacao"]) else None,
@@ -469,8 +480,11 @@ def get_all_employee_exams_grouped(
 
             employees[nid_func]["exames"].append({
                 "NidAnexo": int(row["NidAnexo"]),
-                "NomExame": row["DesAnexo"].split("-")[0].strip()
-                    if row["DesAnexo"] else None,
+                "NomExame": (
+                    re.sub(r'\s+', ' ', re.split(r"[-_—–]", row["DesAnexo"], maxsplit=1)[0]).strip()
+                    if row["DesAnexo"] 
+                    else "Exame"
+                ),
                 "DesAnexo": row["DesAnexo"],
                 "DatASO": row["DatASO"],
                 "DatValidade": row["DatValidade"]
@@ -561,21 +575,6 @@ def get_auth_by_id(nid_auth: int) -> Optional[Dict[str, Any]]:
             LIMIT 1
         """
         cursor.execute(query, (nid_auth,))
-        return cursor.fetchone()
-    finally:
-        connection.close()
-
-def get_refresh_token_by_id(refresh_token_id: int) -> Optional[Dict[str, Any]]:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor(dictionary=True)
-        query = """
-            SELECT NidRefreshToken as id, NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked
-            FROM smt_master.tauthsitemasterrefreshtoken
-            WHERE NidRefreshToken = %s
-            LIMIT 1
-        """
-        cursor.execute(query, (refresh_token_id,))
         return cursor.fetchone()
     finally:
         connection.close()
@@ -701,90 +700,6 @@ def create_employee_login(
         connection.commit()
         return cursor.lastrowid
 
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-# =============== REFRESH TOKENS ===============
-
-def insert_refresh_token(
-    nid_auth: int,
-    refresh_token_hash: str,
-    expires_at: datetime,
-) -> int:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            INSERT INTO smt_master.tauthsitemasterrefreshtoken
-                (NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked)
-            VALUES
-                (%s, %s, %s, 0)
-        """
-        cursor.execute(query, (nid_auth, refresh_token_hash, expires_at))
-        connection.commit()
-        return cursor.lastrowid
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def get_active_refresh_tokens_by_user(nid_auth: int) -> list[Dict[str, Any]]:
-    """
-    Busca refresh tokens não revogados e não expirados do usuário.
-    (Vamos verificar o hash em Python, porque hash Argon2 não é comparável via SQL)
-    """
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor(dictionary=True)
-        query = """
-            SELECT NidRefreshToken, RefreshTokenHash, DatExpiresAt, FlgRevoked
-            FROM smt_master.tauthsitemasterrefreshtoken
-            WHERE NidLogin = %s
-              AND FlgRevoked = 0
-              AND DatExpiresAt > NOW()
-            ORDER BY NidRefreshToken DESC
-            LIMIT 20
-        """
-        cursor.execute(query, (nid_auth,))
-        return cursor.fetchall() or []
-    finally:
-        connection.close()
-
-def revoke_refresh_token(refresh_token_id: int) -> None:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            UPDATE smt_master.tauthsitemasterrefreshtoken
-            SET FlgRevoked = 1,
-                DatRevokedAt = NOW()
-            WHERE NidRefreshToken = %s
-        """
-        cursor.execute(query, (refresh_token_id,))
-        connection.commit()
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def revoke_all_refresh_tokens_for_user(nid_auth: int) -> None:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            UPDATE smt_master.tauthsitemasterrefreshtoken
-            SET FlgRevoked = 1,
-                DatRevokedAt = NOW()
-            WHERE NidLogin = %s
-              AND FlgRevoked = 0
-        """
-        cursor.execute(query, (nid_auth,))
-        connection.commit()
     except mysql.connector.Error:
         connection.rollback()
         raise
