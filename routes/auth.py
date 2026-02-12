@@ -25,6 +25,7 @@ async def login_master(body: LoginRequest):
         access_token=token,
         access_token_expire=28800,
         role="master",
+        login=body.login
     )
 
 @router.post("/convenio/login", response_model=TokenResponse)
@@ -51,6 +52,7 @@ async def login_convenio(body: LoginRequest):
         access_token_expire=28800,
         role="convenio",
         company_id=company_id,
+        login=body.login
     )
 
 @router.post("/cliente/login", response_model=TokenResponse)
@@ -80,4 +82,5 @@ async def login_cliente(body: LoginRequest):
         role="cliente",
         employee_id=employee_id,
         company_id=company_id,
+        login=body.login
     )

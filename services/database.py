@@ -218,11 +218,17 @@ def get_all_employees(
     finally:
         connection.close()
 
-def get_employee_exams(nid_funcionario: int):
+def get_employee_exams(nid_funcionario: int, nid_empresa: int):
     connection = get_db_connection()
+    params = [nid_funcionario]
+
     try:
         query = """
-        SELECT efa.NidAnexo, efa.DesAnexo
+        SELECT DISTINCT
+            efa.NidAnexo,
+            efa.DesAnexo,
+            eh.DesEmpresa,
+            DATE_FORMAT(t.DatProcedimento, '%d/%m/%Y') AS DatProcedimento 
         FROM smt_master.tfuncionario f
         INNER JOIN smt_master.taso a
             ON a.NidFuncionario = f.NidFuncionario
@@ -230,9 +236,24 @@ def get_employee_exams(nid_funcionario: int):
             ON ae.NidAso = a.NidAso
         INNER JOIN smt_master.texamefuncanexo efa
             ON efa.NidProcedimentoFunc = ae.NidProcedimentoFunc
+        INNER JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidFuncionario = f.NidFuncionario
+        INNER JOIN (
+            SELECT NidEmpresa, DesEmpresa
+            FROM smt_master.tempresahist
+            GROUP BY NidEmpresa, DesEmpresa
+        ) eh
+            ON eh.NidEmpresa = fe.NidEmpresa
+        LEFT JOIN smt_master.tprocedimentofunc t
+            ON efa.NidProcedimentoFunc = t.NidProcedimentoFunc
         WHERE f.NidFuncionario = %s
         """
-        df = pd.read_sql_query(query, connection, params=[nid_funcionario])
+
+        if nid_empresa:
+            query += "AND fe.NidEmpresa = %s"
+            params.append(nid_empresa)
+
+        df = pd.read_sql_query(query, connection, params=params)
         
         exams = []
         for _, row in df.iterrows():
@@ -244,11 +265,13 @@ def get_employee_exams(nid_funcionario: int):
                 if des_anexo 
                 else "Exame"
             )
-            
+
             exams.append({
                 "NidAnexo": row['NidAnexo'],
                 "NomExame": nom_exame,
-                "DesAnexo": des_anexo
+                "DesAnexo": des_anexo,
+                "DesEmpresa": row['DesEmpresa'],
+                "DatProcedimento": row['DatProcedimento']
             })
         return exams
     finally:
@@ -361,6 +384,7 @@ def get_all_employee_exams_grouped(
     skip: int = 0,
     limit: int = 10,
     nid_empresa: int = None,
+    nid_funcionario: int = None,
     nome: str = None,
     empresa: str = None,
     cpf: str = None,
@@ -395,6 +419,10 @@ def get_all_employee_exams_grouped(
         if nid_empresa:
             where_clauses.append("fe.NidEmpresa = %s")
             params.append(nid_empresa)
+
+        if nid_funcionario:
+            where_clauses.append("f.NidFuncionario = %s")
+            params.append(nid_funcionario)
 
         if nome:
             where_clauses.append("f.NomFuncionario LIKE %s")
@@ -613,14 +641,13 @@ def create_master_login(login: str, senha_hash: str) -> int:
         cursor.execute(query, (login, senha_hash))
         connection.commit()
         return cursor.lastrowid
-
     except mysql.connector.Error:
         connection.rollback()
         raise
     finally:
         connection.close()
 
-def create_company_login(login: str, senha_hash: str, nid_empresa: int) -> int:
+def create_company_login(login: str, senha_hash: str, nid_empresa: int, access_level: int) -> int:
     connection = get_db_connection()
     try:
         cursor = connection.cursor()
@@ -641,14 +668,13 @@ def create_company_login(login: str, senha_hash: str, nid_empresa: int) -> int:
 
         query = """
             INSERT INTO smt_master.tauthsitemaster
-                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario)
+                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario, AccessLevel)
             VALUES
-                (%s, %s, 'convenio', %s, NULL)
+                (%s, %s, 'convenio', %s, NULL, %s)
         """
-        cursor.execute(query, (login, senha_hash, nid_empresa))
+        cursor.execute(query, (login, senha_hash, nid_empresa, access_level))
         connection.commit()
         return cursor.lastrowid
-
     except mysql.connector.Error:
         connection.rollback()
         raise
@@ -668,7 +694,7 @@ def create_employee_login(
         if login_exists_anywhere(login):
             raise ValueError("Login já está em uso")
 
-        # valida funcionário existe
+        # Valida funcionário existe
         check_func = """
             SELECT 1
             FROM smt_master.tfuncionario
@@ -679,7 +705,7 @@ def create_employee_login(
         if not cursor.fetchone():
             raise ValueError("Funcionário não encontrado")
 
-        # valida vínculo funcionário x empresa
+        # Valida vínculo funcionário x empresa
         check_vinculo = """
             SELECT 1
             FROM smt_master.tfuncionarioemp
@@ -699,7 +725,6 @@ def create_employee_login(
         cursor.execute(query, (login, senha_hash, nid_empresa, nid_funcionario))
         connection.commit()
         return cursor.lastrowid
-
     except mysql.connector.Error:
         connection.rollback()
         raise

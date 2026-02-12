@@ -10,5 +10,6 @@ class TokenResponse(BaseModel):
     access_token_expire: int
     token_type: str = "bearer"
     role: str
+    login: str
     company_id: Optional[int] = None
     employee_id: Optional[int] = None

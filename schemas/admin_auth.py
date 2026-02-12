@@ -9,6 +9,7 @@ class CreateCompanyLoginRequest(BaseModel):
     login: str = Field(min_length=3, max_length=100)
     senha: str = Field(min_length=8, max_length=128)
     company_id: int
+    access_level: int
 
 class CreateEmployeeLoginRequest(BaseModel):
     login: str = Field(min_length=3, max_length=100)
