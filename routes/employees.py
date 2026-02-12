@@ -10,8 +10,13 @@ router = APIRouter()
 @router.get("/empresa/{nid_empresa}/funcionarios", response_model=EmployeeList)
 async def get_employees(nid_empresa: int):
     try:
-        employees = get_employees_by_company(nid_empresa)
-        return {"employees": employees, "total": len(employees)}
+        employees, counters = get_employees_by_company(nid_empresa)
+        return {
+            "employees": employees, 
+            "total": counters['total'],
+            "total_ativos": counters['total_ativos'],
+            "total_inativos": counters['total_inativos']
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -45,12 +50,14 @@ def get_colaboradores_dados(
     page: int = 1, 
     limit: int = 10, 
     nome: Optional[str] = None, 
+    nidFuncionario: Optional[int] = None,
     empresa: Optional[str] = None,
+    nidEmpresa: Optional[int] = None,
     cpf: Optional[str] = None,
     status: Optional[int] = None
 ):
     skip = (page - 1) * limit
-    employees, counters = get_all_employees(skip=skip, limit=limit, nome=nome, empresa=empresa, cpf=cpf, status=status)
+    employees, counters = get_all_employees(skip=skip, limit=limit, nome=nome, nidFuncionario=nidFuncionario, empresa=empresa, nidEmpresa=nidEmpresa, cpf=cpf, status=status)
     return {
         "employees": employees, 
         "total": counters['total'],
