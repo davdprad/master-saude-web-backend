@@ -12,6 +12,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://192.168.15.6:3000",
+        "https://master-saude-web-frontend-lm99fr5xr.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],

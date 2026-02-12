@@ -4,7 +4,11 @@ from dotenv import load_dotenv
 from typing import Optional, Dict, Any
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+from utils.cnpj_formatter import format_cnpj_cei
 import os
+import re
+
+padrao_split = re.compile(r"\s*[_\-\u2013\u2014]\s*")
 
 load_dotenv()
 
@@ -58,9 +62,25 @@ def get_employees_by_company(nid_empresa: int):
             ON fu.NidFuncao = fe.NidFuncao
         WHERE fe.NidEmpresa = %s
         """
+
         df = pd.read_sql_query(query, connection, params=[nid_empresa])
-        df['status'] = df['FlgAtivo'].apply(lambda x: 'Ativo' if x == 1 else 'Inativo')
-        return df.to_dict('records')
+
+        # Normaliza FlgAtivo (NULL -> 0) e cria status
+        df["FlgAtivo"] = df["FlgAtivo"].fillna(0).astype(int)
+        df["status"] = df["FlgAtivo"].apply(lambda x: "Ativo" if x == 1 else "Inativo")
+
+        # Totais
+        total = int(len(df))
+        total_ativos = int((df["FlgAtivo"] == 1).sum())
+        total_inativos = int((df["FlgAtivo"] == 0).sum())
+
+        employees = df.to_dict("records")
+
+        return employees, {
+            'total': total,
+            'total_ativos': total_ativos,
+            'total_inativos': total_inativos
+        }
     finally:
         connection.close()
 
@@ -68,7 +88,9 @@ def get_all_employees(
     skip: int = 0,
     limit: int = 10,
     nome: str = None,
-    empresa: str = None,
+    nidFuncionario: Optional[int] = None,
+    empresa: Optional[str] = None,
+    nidEmpresa: Optional[int] = None,
     cpf: str = None,
     status: int = None
 ):
@@ -110,9 +132,17 @@ def get_all_employees(
             where_clauses.append("f.NomFuncionario LIKE %s")
             params.append(f"%{nome}%")
 
+        if nidFuncionario:
+            where_clauses.append("f.NidFuncionario LIKE %s")
+            params.append(f"{nidFuncionario}")
+
         if empresa:
             where_clauses.append("eh.DesEmpresa LIKE %s")
             params.append(f"%{empresa}%")
+
+        if nidEmpresa:
+            where_clauses.append("fe.NidEmpresa LIKE %s")
+            params.append(f"{nidEmpresa}")
 
         if cpf:
             where_clauses.append("f.DesCPF LIKE %s")
@@ -128,29 +158,29 @@ def get_all_employees(
 
         # 🔹 COUNT correto (sem multiplicação)
         count_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
         """
         cursor.execute(count_query, tuple(params))
         total_count = cursor.fetchone()[0]
 
         # 🔹 Contagem de colaboradores ativos
         count_ativos_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
-        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 1
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
+            {"AND" if where_str else "WHERE"} fe.FlgAtivo = 1
         """
         cursor.execute(count_ativos_query, tuple(params))
         total_ativos = cursor.fetchone()[0]
 
         # 🔹 Contagem de colaboradores inativos
         count_inativos_query = f"""
-        SELECT COUNT(DISTINCT f.NidFuncionario)
-        {base_query}
-        {where_str}
-        {"AND" if where_str else "WHERE"} fe.FlgAtivo = 0
+            SELECT COUNT(DISTINCT f.NidFuncionario)
+            {base_query}
+            {where_str}
+            {"AND" if where_str else "WHERE"} fe.FlgAtivo = 0
         """
         cursor.execute(count_inativos_query, tuple(params))
         total_inativos = cursor.fetchone()[0]
@@ -189,11 +219,17 @@ def get_all_employees(
     finally:
         connection.close()
 
-def get_employee_exams(nid_funcionario: int):
+def get_employee_exams(nid_funcionario: int, nid_empresa: int):
     connection = get_db_connection()
+    params = [nid_funcionario]
+
     try:
         query = """
-        SELECT efa.NidAnexo, efa.DesAnexo
+        SELECT DISTINCT
+            efa.NidAnexo,
+            efa.DesAnexo,
+            eh.DesEmpresa,
+            DATE_FORMAT(t.DatProcedimento, '%d/%m/%Y') AS DatProcedimento 
         FROM smt_master.tfuncionario f
         INNER JOIN smt_master.taso a
             ON a.NidFuncionario = f.NidFuncionario
@@ -201,20 +237,42 @@ def get_employee_exams(nid_funcionario: int):
             ON ae.NidAso = a.NidAso
         INNER JOIN smt_master.texamefuncanexo efa
             ON efa.NidProcedimentoFunc = ae.NidProcedimentoFunc
+        INNER JOIN smt_master.tfuncionarioemp fe
+            ON fe.NidFuncionario = f.NidFuncionario
+        INNER JOIN (
+            SELECT NidEmpresa, DesEmpresa
+            FROM smt_master.tempresahist
+            GROUP BY NidEmpresa, DesEmpresa
+        ) eh
+            ON eh.NidEmpresa = fe.NidEmpresa
+        LEFT JOIN smt_master.tprocedimentofunc t
+            ON efa.NidProcedimentoFunc = t.NidProcedimentoFunc
         WHERE f.NidFuncionario = %s
         """
-        df = pd.read_sql_query(query, connection, params=[nid_funcionario])
+
+        if nid_empresa:
+            query += "AND fe.NidEmpresa = %s"
+            params.append(nid_empresa)
+
+        df = pd.read_sql_query(query, connection, params=params)
         
         exams = []
         for _, row in df.iterrows():
             des_anexo = row['DesAnexo']
+
             # Extract name before the first hyphen, or use full name if no hyphen
-            nom_exame = des_anexo.split('-')[0].strip() if des_anexo and '-' in des_anexo else (des_anexo or "Exame")
-            
+            nom_exame = (
+                re.sub(r'\s+', ' ', re.split(r"[-_—–]", des_anexo, maxsplit=1)[0]).strip()
+                if des_anexo 
+                else "Exame"
+            )
+
             exams.append({
                 "NidAnexo": row['NidAnexo'],
                 "NomExame": nom_exame,
-                "DesAnexo": des_anexo
+                "DesAnexo": des_anexo,
+                "DesEmpresa": row['DesEmpresa'],
+                "DatProcedimento": row['DatProcedimento']
             })
         return exams
     finally:
@@ -248,6 +306,7 @@ def get_companies_with_employee_count(
         SELECT 
             eh.NidEmpresa,
             eh.DesEmpresa,
+            eh.DesCNPJCEI,
             eh.GraRisco,
             eh.NidCNAE1,
             eh.FlgSituacao,
@@ -279,7 +338,7 @@ def get_companies_with_employee_count(
 
         # Group by to aggregate employee counts
         group_by = """
-        GROUP BY eh.NidEmpresa, eh.DesEmpresa, eh.GraRisco, 
+        GROUP BY eh.NidEmpresa, eh.DesEmpresa, eh.GraRisco, eh.DesCNPJCEI,
                  eh.NidCNAE1, eh.FlgSituacao, eh.DesEMail, eh.DesTelefone1, eh.DesTelefone2
         """
 
@@ -308,6 +367,7 @@ def get_companies_with_employee_count(
             companies.append({
                 "NidEmpresa": int(row["NidEmpresa"]),
                 "DesEmpresa": row["DesEmpresa"],
+                "DesCNPJCEI": format_cnpj_cei(row["DesCNPJCEI"]),
                 "GraRisco": int(row["GraRisco"]) if pd.notna(row["GraRisco"]) else None,
                 "NidCNAE1": int(row["NidCNAE1"]) if pd.notna(row["NidCNAE1"]) else None,
                 "FlgSituacao": int(row["FlgSituacao"]) if pd.notna(row["FlgSituacao"]) else None,
@@ -325,6 +385,7 @@ def get_all_employee_exams_grouped(
     skip: int = 0,
     limit: int = 10,
     nid_empresa: int = None,
+    nid_funcionario: int = None,
     nome: str = None,
     empresa: str = None,
     cpf: str = None,
@@ -359,6 +420,10 @@ def get_all_employee_exams_grouped(
         if nid_empresa:
             where_clauses.append("fe.NidEmpresa = %s")
             params.append(nid_empresa)
+
+        if nid_funcionario:
+            where_clauses.append("f.NidFuncionario = %s")
+            params.append(nid_funcionario)
 
         if nome:
             where_clauses.append("f.NomFuncionario LIKE %s")
@@ -444,8 +509,11 @@ def get_all_employee_exams_grouped(
 
             employees[nid_func]["exames"].append({
                 "NidAnexo": int(row["NidAnexo"]),
-                "NomExame": row["DesAnexo"].split("-")[0].strip()
-                    if row["DesAnexo"] else None,
+                "NomExame": (
+                    re.sub(r'\s+', ' ', re.split(r"[-_—–]", row["DesAnexo"], maxsplit=1)[0]).strip()
+                    if row["DesAnexo"] 
+                    else "Exame"
+                ),
                 "DesAnexo": row["DesAnexo"],
                 "DatASO": row["DatASO"],
                 "DatValidade": row["DatValidade"]
@@ -540,21 +608,6 @@ def get_auth_by_id(nid_auth: int) -> Optional[Dict[str, Any]]:
     finally:
         connection.close()
 
-def get_refresh_token_by_id(refresh_token_id: int) -> Optional[Dict[str, Any]]:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor(dictionary=True)
-        query = """
-            SELECT NidRefreshToken as id, NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked
-            FROM smt_master.tauthsitemasterrefreshtoken
-            WHERE NidRefreshToken = %s
-            LIMIT 1
-        """
-        cursor.execute(query, (refresh_token_id,))
-        return cursor.fetchone()
-    finally:
-        connection.close()
-
 # =============== CADASTRO DE NOVOS LOGINS ===============
 
 def login_exists_anywhere(login: str) -> bool:
@@ -589,14 +642,13 @@ def create_master_login(login: str, senha_hash: str) -> int:
         cursor.execute(query, (login, senha_hash))
         connection.commit()
         return cursor.lastrowid
-
     except mysql.connector.Error:
         connection.rollback()
         raise
     finally:
         connection.close()
 
-def create_company_login(login: str, senha_hash: str, nid_empresa: int) -> int:
+def create_company_login(login: str, senha_hash: str, nid_empresa: int, access_level: int) -> int:
     connection = get_db_connection()
     try:
         cursor = connection.cursor()
@@ -617,14 +669,13 @@ def create_company_login(login: str, senha_hash: str, nid_empresa: int) -> int:
 
         query = """
             INSERT INTO smt_master.tauthsitemaster
-                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario)
+                (DesLogin, DesSenhaHash, DesRole, NidEmpresa, NidFuncionario, AccessLevel)
             VALUES
-                (%s, %s, 'convenio', %s, NULL)
+                (%s, %s, 'convenio', %s, NULL, %s)
         """
-        cursor.execute(query, (login, senha_hash, nid_empresa))
+        cursor.execute(query, (login, senha_hash, nid_empresa, access_level))
         connection.commit()
         return cursor.lastrowid
-
     except mysql.connector.Error:
         connection.rollback()
         raise
@@ -644,7 +695,7 @@ def create_employee_login(
         if login_exists_anywhere(login):
             raise ValueError("Login já está em uso")
 
-        # valida funcionário existe
+        # Valida funcionário existe
         check_func = """
             SELECT 1
             FROM smt_master.tfuncionario
@@ -655,7 +706,7 @@ def create_employee_login(
         if not cursor.fetchone():
             raise ValueError("Funcionário não encontrado")
 
-        # valida vínculo funcionário x empresa
+        # Valida vínculo funcionário x empresa
         check_vinculo = """
             SELECT 1
             FROM smt_master.tfuncionarioemp
@@ -675,91 +726,6 @@ def create_employee_login(
         cursor.execute(query, (login, senha_hash, nid_empresa, nid_funcionario))
         connection.commit()
         return cursor.lastrowid
-
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-# =============== REFRESH TOKENS ===============
-
-def insert_refresh_token(
-    nid_auth: int,
-    refresh_token_hash: str,
-    expires_at: datetime,
-) -> int:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            INSERT INTO smt_master.tauthsitemasterrefreshtoken
-                (NidLogin, RefreshTokenHash, DatExpiresAt, FlgRevoked)
-            VALUES
-                (%s, %s, %s, 0)
-        """
-        cursor.execute(query, (nid_auth, refresh_token_hash, expires_at))
-        connection.commit()
-        return cursor.lastrowid
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def get_active_refresh_tokens_by_user(nid_auth: int) -> list[Dict[str, Any]]:
-    """
-    Busca refresh tokens não revogados e não expirados do usuário.
-    (Vamos verificar o hash em Python, porque hash Argon2 não é comparável via SQL)
-    """
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor(dictionary=True)
-        query = """
-            SELECT NidRefreshToken, RefreshTokenHash, DatExpiresAt, FlgRevoked
-            FROM smt_master.tauthsitemasterrefreshtoken
-            WHERE NidLogin = %s
-              AND FlgRevoked = 0
-              AND DatExpiresAt > NOW()
-            ORDER BY NidRefreshToken DESC
-            LIMIT 20
-        """
-        cursor.execute(query, (nid_auth,))
-        return cursor.fetchall() or []
-    finally:
-        connection.close()
-
-def revoke_refresh_token(refresh_token_id: int) -> None:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            UPDATE smt_master.tauthsitemasterrefreshtoken
-            SET FlgRevoked = 1,
-                DatRevokedAt = NOW()
-            WHERE NidRefreshToken = %s
-        """
-        cursor.execute(query, (refresh_token_id,))
-        connection.commit()
-    except mysql.connector.Error:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-def revoke_all_refresh_tokens_for_user(nid_auth: int) -> None:
-    connection = get_db_connection()
-    try:
-        cursor = connection.cursor()
-        query = """
-            UPDATE smt_master.tauthsitemasterrefreshtoken
-            SET FlgRevoked = 1,
-                DatRevokedAt = NOW()
-            WHERE NidLogin = %s
-              AND FlgRevoked = 0
-        """
-        cursor.execute(query, (nid_auth,))
-        connection.commit()
     except mysql.connector.Error:
         connection.rollback()
         raise

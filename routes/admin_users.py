@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from schemas.admin_auth import (
     CreateMasterUserRequest,
     CreateCompanyLoginRequest,
@@ -12,8 +12,9 @@ from services import database as db
 
 router = APIRouter()
 
-@router.post("/users/master", response_model=CreatedLoginResponse)
+@router.post("/master", response_model=CreatedLoginResponse)
 async def create_master_user(
+    request: Request,
     body: CreateMasterUserRequest,
     _payload=Depends(require_master),
 ):
@@ -28,16 +29,14 @@ async def create_master_user(
             login=body.login,
             role="master",
         )
-
     except ValueError as e:
         msg = str(e)
         status_code = 409 if "Login já" in msg else 400
         raise HTTPException(status_code=status_code, detail=msg)
-
     except Exception:
         raise HTTPException(status_code=500, detail="Erro ao cadastrar usuário master")
 
-@router.post("/convenios/master", response_model=CreatedLoginResponse)
+@router.post("/convenio", response_model=CreatedLoginResponse)
 async def create_company_login(
     body: CreateCompanyLoginRequest,
     _payload=Depends(require_master),
@@ -50,6 +49,7 @@ async def create_company_login(
             body.login,
             senha_hash,
             body.company_id,
+            body.access_level
         )
 
         return CreatedLoginResponse(
@@ -70,7 +70,7 @@ async def create_company_login(
     except Exception:
         raise HTTPException(status_code=500, detail="Erro ao cadastrar login do convênio")
 
-@router.post("/clientes/master", response_model=CreatedLoginResponse)
+@router.post("/cliente", response_model=CreatedLoginResponse)
 async def create_employee_login(
     body: CreateEmployeeLoginRequest,
     _payload=Depends(require_master),
@@ -96,13 +96,12 @@ async def create_employee_login(
 
     except ValueError as e:
         msg = str(e)
-        if "Login já" in msg:
+        if "em uso" in msg:
             raise HTTPException(status_code=409, detail=msg)
-        if "Funcionário não encontrado" in msg:
+        if "não encontrado" in msg:
             raise HTTPException(status_code=404, detail=msg)
         if "não vinculado" in msg:
             raise HTTPException(status_code=400, detail=msg)
         raise HTTPException(status_code=400, detail=msg)
-
     except Exception:
         raise HTTPException(status_code=500, detail="Erro ao cadastrar login do cliente")

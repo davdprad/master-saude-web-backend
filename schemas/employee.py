@@ -23,8 +23,8 @@ class EmployeeExam(BaseModel):
     NidAnexo: Optional[int] = None
     NomExame: Optional[str] = None
     DesAnexo: Optional[str] = None
-    DatASO: Optional[str] = None
-    DatValidade: Optional[str] = None
+    DesEmpresa: Optional[str] = None
+    DatProcedimento: Optional[str] = None
 
 class EmployeeExamGrouped(BaseModel):
     NidFuncionario: int
