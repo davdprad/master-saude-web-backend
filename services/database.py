@@ -8,8 +8,6 @@ from utils.cnpj_formatter import format_cnpj_cei
 import os
 import re
 
-padrao_split = re.compile(r"\s*[_\-\u2013\u2014]\s*")
-
 load_dotenv()
 
 def get_db_connection():
@@ -219,7 +217,7 @@ def get_all_employees(
     finally:
         connection.close()
 
-def get_employee_exams(nid_funcionario: int, nid_empresa: int):
+def get_employee_exams(nid_funcionario: int, nid_empresa: int = None, only_aso: bool = False):
     connection = get_db_connection()
     params = [nid_funcionario]
 
@@ -254,18 +252,24 @@ def get_employee_exams(nid_funcionario: int, nid_empresa: int):
             query += "AND fe.NidEmpresa = %s"
             params.append(nid_empresa)
 
+        if only_aso:
+            query += " AND efa.DesAnexo LIKE '%aso%'"
+
         df = pd.read_sql_query(query, connection, params=params)
         
         exams = []
         for _, row in df.iterrows():
             des_anexo = row['DesAnexo']
 
-            # Extract name before the first hyphen, or use full name if no hyphen
-            nom_exame = (
-                re.sub(r'\s+', ' ', re.split(r"[-_—–]", des_anexo, maxsplit=1)[0]).strip()
-                if des_anexo 
-                else "Exame"
-            )
+            # Extract name before the first separator, or use full name if no separator
+            if des_anexo and "raio" in des_anexo.lower():
+                nom_exame = re.sub(r'\s+', ' ', des_anexo.rsplit('-', 1)[0]).strip()
+            else:
+                nom_exame = (
+                    re.sub(r'\s+', ' ', re.split(r"[-_—–]", des_anexo, maxsplit=1)[0]).strip()
+                    if des_anexo 
+                    else "Exame"
+                )
 
             exams.append({
                 "NidAnexo": row['NidAnexo'],
@@ -278,11 +282,13 @@ def get_employee_exams(nid_funcionario: int, nid_empresa: int):
     finally:
         connection.close()
 
-def get_exam_file_path(nid_anexo: int):
+def get_exam_file_path(nid_anexo: int, only_aso: bool = False):
     connection = get_db_connection()
     try:
         cursor = connection.cursor()
         query = "SELECT DesPathAnexo FROM smt_master.texamefuncanexo WHERE NidAnexo = %s"
+        if only_aso:
+            query += " AND DesAnexo LIKE '%aso%'"
         cursor.execute(query, (nid_anexo,))
         result = cursor.fetchone()
         if result:
@@ -354,6 +360,34 @@ def get_companies_with_employee_count(
         cursor.execute(count_query, tuple(params))
         total = cursor.fetchone()[0]
 
+        # 1.1 Count Active Companies
+        ativos_where_clauses = list(where_clauses)
+        ativos_params = list(params)
+        ativos_where_clauses.append("eh.FlgSituacao = 1")
+        ativos_where_str = "WHERE " + " AND ".join(ativos_where_clauses)
+
+        count_ativos_query = f"""
+        SELECT COUNT(*) FROM (
+            {base_query} {ativos_where_str} {group_by}
+        ) as subquery
+        """
+        cursor.execute(count_ativos_query, tuple(ativos_params))
+        total_ativas = cursor.fetchone()[0]
+
+        # 1.2 Count Inactive Companies
+        inativos_where_clauses = list(where_clauses)
+        inativos_params = list(params)
+        inativos_where_clauses.append("eh.FlgSituacao = 0")
+        inativos_where_str = "WHERE " + " AND ".join(inativos_where_clauses)
+
+        count_inativos_query = f"""
+        SELECT COUNT(*) FROM (
+            {base_query} {inativos_where_str} {group_by}
+        ) as subquery
+        """
+        cursor.execute(count_inativos_query, tuple(inativos_params))
+        total_inativas = cursor.fetchone()[0]
+
         # 2. Get Paginated Companies
         data_query = f"""
         {base_query} {where_str} {group_by} {order_by} LIMIT %s OFFSET %s
@@ -377,7 +411,11 @@ def get_companies_with_employee_count(
                 "total_funcionarios": int(row["total_funcionarios"]) if pd.notna(row["total_funcionarios"]) else 0
             })
 
-        return companies, {"total": total}
+        return companies, {
+            "total": total,
+            "total_ativas": total_ativas,
+            "total_inativas": total_inativas
+        }
     finally:
         connection.close()
 
@@ -389,7 +427,8 @@ def get_all_employee_exams_grouped(
     nome: str = None,
     empresa: str = None,
     cpf: str = None,
-    status: int = None
+    status: int = None,
+    only_aso: bool = False
 ):
     connection = get_db_connection()
     try:
@@ -440,6 +479,9 @@ def get_all_employee_exams_grouped(
         if status is not None:
             where_clauses.append("fe.FlgAtivo = %s")
             params.append(status)
+
+        if only_aso:
+            where_clauses.append("efa.DesAnexo LIKE '%aso%'")
 
         where_str = ""
         if where_clauses:
@@ -507,13 +549,19 @@ def get_all_employee_exams_grouped(
                     "exames": []
                 }
 
+            des_anexo = row["DesAnexo"]
+            if des_anexo and "raio" in des_anexo.lower():
+                nom_exame = re.sub(r'\s+', ' ', des_anexo.rsplit('-', 1)[0]).strip()
+            else:
+                nom_exame = (
+                    re.sub(r'\s+', ' ', re.split(r"[-_—–]", des_anexo, maxsplit=1)[0]).strip()
+                    if des_anexo 
+                    else "Exame"
+                )
+
             employees[nid_func]["exames"].append({
                 "NidAnexo": int(row["NidAnexo"]),
-                "NomExame": (
-                    re.sub(r'\s+', ' ', re.split(r"[-_—–]", row["DesAnexo"], maxsplit=1)[0]).strip()
-                    if row["DesAnexo"] 
-                    else "Exame"
-                ),
+                "NomExame": nom_exame,
                 "DesAnexo": row["DesAnexo"],
                 "DatASO": row["DatASO"],
                 "DatValidade": row["DatValidade"]
@@ -555,7 +603,8 @@ def get_company_login_by_login(login: str) -> Optional[Dict[str, Any]]:
                 DesLogin AS login,
                 DesSenhaHash AS senha_hash,
                 DesRole AS role,
-                NidEmpresa AS company_id
+                NidEmpresa AS company_id,
+                AccessLevel
             FROM smt_master.tauthsitemaster
             WHERE DesLogin = %s
               AND DesRole = 'convenio'
@@ -605,6 +654,97 @@ def get_auth_by_id(nid_auth: int) -> Optional[Dict[str, Any]]:
         """
         cursor.execute(query, (nid_auth,))
         return cursor.fetchone()
+    finally:
+        connection.close()
+
+def get_registered_logins(
+    skip: int = 0,
+    limit: int = 10,
+    login: Optional[str] = None,
+    role: Optional[str] = None
+):
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor(dictionary=True)
+
+        where_clauses = []
+        params = []
+
+        if login:
+            where_clauses.append("a.DesLogin LIKE %s")
+            params.append(f"%{login}%")
+
+        if role:
+            where_clauses.append("a.DesRole = %s")
+            params.append(role)
+
+        where_str = ""
+        if where_clauses:
+            where_str = "WHERE " + " AND ".join(where_clauses)
+
+        count_query = f"""
+            SELECT COUNT(*) AS total
+            FROM smt_master.tauthsitemaster a
+            {where_str}
+        """
+        cursor.execute(count_query, tuple(params))
+        total = int(cursor.fetchone()["total"])
+
+        data_query = f"""
+            SELECT
+                a.NidLogin AS id,
+                a.DesLogin AS login,
+                a.DesRole AS role,
+                a.NidEmpresa AS company_id,
+                a.NidFuncionario AS employee_id,
+                a.AccessLevel AS access_level
+            FROM smt_master.tauthsitemaster a
+            {where_str}
+            ORDER BY a.NidLogin DESC
+            LIMIT %s OFFSET %s
+        """
+        cursor.execute(data_query, tuple(params + [limit, skip]))
+        rows = cursor.fetchall()
+
+        users = []
+        for row in rows:
+            users.append({
+                "id": int(row["id"]),
+                "login": row["login"],
+                "role": row["role"],
+                "company_id": int(row["company_id"]) if row.get("company_id") is not None else None,
+                "employee_id": int(row["employee_id"]) if row.get("employee_id") is not None else None,
+                "access_level": int(row["access_level"]) if row.get("access_level") is not None else None,
+            })
+
+        return users, {"total": total}
+    finally:
+        connection.close()
+
+def delete_registered_login(user_id: int) -> None:
+    connection = get_db_connection()
+    try:
+        cursor = connection.cursor()
+
+        check_query = """
+            SELECT 1
+            FROM smt_master.tauthsitemaster
+            WHERE NidLogin = %s
+            LIMIT 1
+        """
+        cursor.execute(check_query, (user_id,))
+        if not cursor.fetchone():
+            raise ValueError("Usuário não encontrado")
+
+        delete_query = """
+            DELETE FROM smt_master.tauthsitemaster
+            WHERE NidLogin = %s
+        """
+        cursor.execute(delete_query, (user_id,))
+        connection.commit()
+    except mysql.connector.Error:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 

@@ -23,3 +23,18 @@ class CreatedLoginResponse(BaseModel):
     role: str
     company_id: Optional[int] = None
     employee_id: Optional[int] = None
+
+class RegisteredLoginUser(BaseModel):
+    id: int
+    login: str
+    role: str
+    company_id: Optional[int] = None
+    employee_id: Optional[int] = None
+    access_level: Optional[int] = None
+
+class RegisteredLoginUserList(BaseModel):
+    users: list[RegisteredLoginUser]
+    total: int
+
+class DeleteLoginResponse(BaseModel):
+    message: str

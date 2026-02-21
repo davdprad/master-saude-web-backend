@@ -17,6 +17,7 @@ async def create_access_token(
     sub: str,
     company_id: Optional[int] = None,
     employee_id: Optional[int] = None,
+    access_level: Optional[int] = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -29,6 +30,8 @@ async def create_access_token(
         payload["company_id"] = company_id
     if employee_id is not None:
         payload["employee_id"] = employee_id
+    if access_level is not None:
+        payload["access_level"] = access_level
 
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 

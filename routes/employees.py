@@ -41,6 +41,9 @@ async def get_employees_exams_grouped(
     _payload=Depends(require_role({"master", "convenio"})),
 ):
     try:
+        access_level = _payload.get("access_level")
+        only_aso = (_payload.get("role") == "convenio" and access_level == 2)
+
         skip = (page - 1) * limit
         employees, _ = get_all_employee_exams_grouped(
             skip=skip, 
@@ -50,7 +53,8 @@ async def get_employees_exams_grouped(
             nome=nome,
             empresa=empresa,
             cpf=cpf,
-            status=status
+            status=status,
+            only_aso=only_aso
         )
         return employees
     except Exception as e:
@@ -83,7 +87,10 @@ def get_funcionario_exames(
     nid_empresa: Optional[int] = None,
     _payload=Depends(require_role({"master", "convenio", "cliente"})),
 ):
-    exams = get_employee_exams(nid_funcionario, nid_empresa)
+    access_level = _payload.get("access_level")
+    only_aso = (_payload.get("role") == "convenio" and access_level == 2)
+
+    exams = get_employee_exams(nid_funcionario, nid_empresa, only_aso=only_aso)
     return exams
 
 @router.get("/exame/download/{nid_anexo}")
@@ -91,7 +98,10 @@ def download_exame(
     nid_anexo: int,
     _payload=Depends(require_role({"master", "convenio", "cliente"})),
 ):
-    filename = get_exam_file_path(nid_anexo)
+    access_level = _payload.get("access_level")
+    only_aso = (_payload.get("role") == "convenio" and access_level == 2)
+
+    filename = get_exam_file_path(nid_anexo, only_aso=only_aso)
     
     if not filename:
         raise HTTPException(status_code=404, detail="Registro do exame não encontrado.")
@@ -115,5 +125,7 @@ def get_empresas_dados(
     companies, counters = get_companies_with_employee_count(skip=skip, limit=limit, empresa=empresa, status=status)
     return {
         "companies": companies, 
-        "total": counters['total']
+        "total": counters['total'],
+        "total_ativas": counters['total_ativas'],
+        "total_inativas": counters['total_inativas']
     }

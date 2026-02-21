@@ -40,11 +40,13 @@ async def login_convenio(body: LoginRequest):
         raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
     company_id = int(row["company_id"])
+    access_level = row.get("AccessLevel")
 
     token = await create_access_token(
         role="convenio",
         sub=f"company:{company_id}",
         company_id=company_id,
+        access_level=access_level,
     )
 
     return TokenResponse(
