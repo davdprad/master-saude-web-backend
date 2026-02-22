@@ -1,85 +1,93 @@
-# API de Gerenciamento de Funcionários, Empresas e Exames
+# API de Gerenciamento de Funcionários, Empresas e Exames (NestJS)
 
-Esta é uma API REST desenvolvida com FastAPI para gerenciar funcionários, empresas e exames médicos. A API permite consultar funcionários ativos de uma empresa específica, incluindo suas informações pessoais, setores e funções.
+Esta API foi migrada de FastAPI para **NestJS**, mantendo os mesmos endpoints e regras de negócio para funcionários, empresas, exames, autenticação e fila.
 
-## Funcionalidades
+## Stack
 
-- **Consulta de Funcionários por Empresa**: Obter lista de funcionários ativos de uma empresa, com nomes, CPFs, setores e funções.
-- Estrutura modular seguindo boas práticas de desenvolvimento:
-  - `services/`: Lógica de negócio e acesso ao banco de dados.
-  - `schemas/`: Modelos Pydantic para validação e serialização.
-  - `routes/`: Definição dos endpoints da API.
-
-## Tecnologias Utilizadas
-
-- **FastAPI**: Framework para construção da API.
-- **MariaDB**: Banco de dados relacional.
-- **Pydantic**: Validação de dados.
-- **Uvicorn**: Servidor ASGI para execução da API.
-- **python-dotenv**: Gerenciamento de variáveis de ambiente.
+- **NestJS**
+- **TypeScript**
+- **MariaDB/MySQL** (`mysql2`)
+- **JWT** para autenticação por perfil (`master`, `convenio`, `cliente`)
+- **bcrypt** para hash de senha
 
 ## Instalação
 
-1. Clone o repositório:
-   ```bash
-   git clone <url-do-repositorio>
-   cd master-saude-web-backend
-   ```
+1. Instale dependências:
 
-2. Crie um ambiente virtual:
-   ```bash
-   python -m venv .venv
-   .\.venv\Scripts\activate  # Windows
-   ```
-
-3. Instale as dependências:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. Configure as variáveis de ambiente no arquivo `.env` (baseie-se no `.env.example`).
-
-5. Execute a API:
-   ```bash
-   uvicorn main:app --reload
-   ```
-
-## Uso
-
-Acesse a documentação interativa em `http://127.0.0.1:8000/docs`.
-
-### Endpoint Principal
-
-- `GET /empresa/{nid_empresa}/funcionarios`: Retorna a lista de funcionários ativos da empresa especificada.
-
-Exemplo de resposta:
-```json
-{
-  "employees": [
-    {
-      "NidFuncionario": 1,
-      "NomFuncionario": "João Silva",
-      "DesCPF": "12345678901",
-      "DesSetor": "Administrativo",
-      "DesFuncao": "Gerente"
-    }
-  ]
-}
+```bash
+npm install
 ```
 
-## Estrutura do Projeto
+2. Configure o arquivo `.env` com as variáveis:
 
+- `PORT` (opcional, padrão `3030`)
+- `DB_HOST`
+- `DB_PORT`
+- `DB_USER`
+- `DB_PASSWORD`
+- `DB_DATABASE`
+- `JWT_SECRET`
+- `JWT_ALGORITHM` (opcional, padrão `HS256`)
+- `JWT_ACCESS_EXPIRE_MINUTES` (opcional, padrão `480`)
+- `EXAMS_PATH` (opcional em dev; se ausente usa `./exames` automaticamente)
+- `CORS_ALLOWED_ORIGINS` (opcional em dev, obrigatório em produção)
+
+Exemplo para produção (`https`):
+
+`CORS_ALLOWED_ORIGINS=https://seu-frontend.vercel.app,https://app.seudominio.com`
+
+Comportamento atual:
+
+- Em `development`: permite origens configuradas e, se não definir variável, usa localhost/rede local.
+- Em `production`: aceita apenas origens `https://` e falha na inicialização se nenhuma origem HTTPS for configurada.
+
+## Execução
+
+Desenvolvimento:
+
+```bash
+npm run start:dev
 ```
-.
-├── main.py                 # Ponto de entrada da aplicação
-├── routes/                 # Definição dos endpoints
-│   └── employees.py
-├── schemas/                # Modelos Pydantic
-│   └── employee.py
-├── services/               # Lógica de negócio
-│   └── database.py
-├── .env                    # Variáveis de ambiente (não versionado)
-├── .env.example            # Exemplo de variáveis de ambiente
-├── .gitignore              # Arquivos ignorados pelo Git
-└── README.md               # Este arquivo
+
+Build de produção:
+
+```bash
+npm run build
+npm run start:prod
 ```
+
+## Endpoints mantidos
+
+- `POST /auth/master/login`
+- `POST /auth/convenio/login`
+- `POST /auth/cliente/login`
+- `GET /empresa/:nid_empresa/funcionarios`
+- `GET /funcionarios-exames-agrupados`
+- `GET /masteruser-colaboradores-dados`
+- `GET /funcionario/:nid_funcionario/exames`
+- `GET /exame/download/:nid_anexo`
+- `GET /empresas`
+- `GET /register/usuarios`
+- `POST /register/usuarios/:user_id/excluir`
+- `POST /register/master`
+- `POST /register/convenio`
+- `POST /register/cliente`
+- `POST /fila/adicionar`
+- `GET /fila/listar/:nid_empresa`
+- `POST /fila/chamar-proximo/:nid_empresa/:tipo_fila`
+- `PUT /fila/:nid_fila/status`
+
+## Swagger
+
+- UI: `/docs`
+- OpenAPI JSON: `/docs-json`
+
+## Estrutura atual
+
+- `src/main.ts`: bootstrap NestJS + CORS
+- `src/modules/database`: queries SQL e acesso ao banco
+- `src/modules/auth`: login, JWT e segurança
+- `src/modules/admin-users`: gestão de usuários cadastrados
+- `src/modules/employees`: funcionários, exames e empresas
+- `src/modules/queue`: fluxo de fila
+
